@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Tetris</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      touch-action: manipulation;
+    }
+    
+    body {
+      background: #111 url('https://assets.codepen.io/21542/tetris-bg-pixel.png');
+      color: white;
+      font-family: 'Press Start 2P', cursive;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin: 0;
+      padding: 10px;
+      overflow: hidden;
+      height: 100vh;
+      user-select: none;
+    }
+
+    h1 {
+      margin: 10px 0;
+      font-size: min(8vw, 36px);
+      color: #FF0D72;
+      text-shadow: 0 0 10px #0DFF72, 
+                   0 0 20px #0DC2FF;
+      background: url('https://assets.codepen.io/21542/tetris-logo.png') center/contain no-repeat;
+      height: 60px;
+      width: 100%;
+      text-indent: -9999px;
+    }
+
+    #game-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 100%;
+      max-width: 400px;
+      background: rgba(0,0,0,0.7);
+      padding: 15px;
+      border-radius: 10px;
+      border: 3px solid #555;
+      box-shadow: 0 0 20px #0DC2FF;
+    }
+
+    #score-container {
+      display: flex;
+      justify-content: space-between;
+      width: 100%;
+      margin-bottom: 15px;
+      font-size: min(5vw, 16px);
+      padding: 10px;
+      background: #222;
+      border-radius: 5px;
+      border: 2px solid #444;
+    }
+
+    canvas {
+      border: 3px solid #555;
+      background-color: rgba(0,0,0,0.8);
+      image-rendering: pixelated;
+      width: 100%;
+      max-width: 300px;
+      max-height: 600px;
+      aspect-ratio: 1/2;
+      box-shadow: 0 0 10px rgba(13, 255, 114, 0.5);
+    }
+
+    #controls {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin-top: 15px;
+      gap: 8px;
+      width: 100%;
+    }
+
+    button {
+      background: #333;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      padding: 12px 15px;
+      font-size: min(4vw, 14px);
+      cursor: pointer;
+      min-width: 60px;
+      text-align: center;
+      font-family: 'Press Start 2P', cursive;
+      transition: all 0.2s;
+      border: 2px solid #555;
+    }
+
+    button:hover {
+      background: #555;
+      transform: scale(1.05);
+    }
+
+    button:active {
+      background: #777;
+      transform: scale(0.95);
+    }
+
+    @media (max-width: 768px) {
+      #controls {
+        margin-top: 10px;
+      }
+      button {
+        padding: 10px 12px;
+      }
+    }
+  </style>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+</head>
+<body>
+  <h1>Tetris</h1>
+  <div id="game-container">
+    <div id="score-container">
+      <div>Score: <span id="score">0</span></div>
+      <div>Level: <span id="level">1</span></div>
+    </div>
+    <canvas id="tetris"></canvas>
+    <div id="controls">
+      <button onclick="playerMove(-1)">←</button>
+      <button onclick="playerRotate(1)">⟳</button>
+      <button onclick="playerMove(1)">→</button>
+      <button onclick="playerDrop()">↓</button>
+      <button onclick="togglePause()">⏸</button>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('tetris');
+    const context = canvas.getContext('2d');
+
+    function resizeCanvas() {
+      const size = Math.min(window.innerWidth * 0.8, 300);
+      canvas.width = size;
+      canvas.height = size * 2;
+      context.setTransform(1, 0, 0, 1, 0, 0); // reset scale
+      context.scale(size / 10, size / 20);
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    const blockImages = {};
+    const blockTypes = ['I', 'O', 'T', 'L', 'J', 'S', 'Z'];
+    blockTypes.forEach(type => {
+      const img = new Image();
+      img.src = `https://assets.codepen.io/21542/tetris-block-${type.toLowerCase()}.png`;
+      blockImages[type] = img;
+    });
+
+    const scoreEl = document.getElementById('score');
+    const levelEl = document.getElementById('level');
+    let score = 0;
+    let level = 1;
+    let lines = 0;
+    let dropCounter = 0;
+    let dropInterval = 1000;
+    let lastTime = 0;
+    let paused = false;
+    let gameOver = false;
+
+    function createMatrix(w, h) {
+      const matrix = [];
+      while (h--) matrix.push(new Array(w).fill(0));
+      return matrix;
+    }
+
+    function createPiece(type) {
+      switch (type) {
+        case 'I': return [[0,1,0,0],[0,1,0,0],[0,1,0,0],[0,1,0,0]];
+        case 'O': return [[2,2],[2,2]];
+        case 'T': return [[0,3,0],[3,3,3],[0,0,0]];
+        case 'L': return [[0,0,4],[4,4,4],[0,0,0]];
+        case 'J': return [[5,0,0],[5,5,5],[0,0,0]];
+        case 'S': return [[0,6,6],[6,6,0],[0,0,0]];
+        case 'Z': return [[7,7,0],[0,7,7],[0,0,0]];
+      }
+    }
+
+    const colors = [
+      null,
+      '#0DC2FF',
+      '#FFE138',
+      '#FF0D72',
+      '#FF8E0D',
+      '#3877FF',
+      '#0DFF72',
+      '#F538FF'
+    ];
+
+    function drawMatrix(matrix, offset) {
+      matrix.forEach((row, y) =>
+        row.forEach((value, x) => {
+          if (value !== 0) {
+            const type = blockTypes[value - 1];
+            if (blockImages[type].complete) {
+              context.drawImage(blockImages[type], x + offset.x, y + offset.y, 1, 1);
+            } else {
+              context.fillStyle = colors[value];
+              context.fillRect(x + offset.x, y + offset.y, 1, 1);
+            }
+            context.strokeStyle = '#111';
+            context.lineWidth = 0.05;
+            context.strokeRect(x + offset.x, y + offset.y, 1, 1);
+          }
+        })
+      );
+    }
+
+    function draw() {
+      context.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      context.fillRect(0, 0, 10, 20);
+
+      context.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+      context.lineWidth = 0.02;
+      for (let x = 0; x < 10; x++) {
+        context.beginPath();
+        context.moveTo(x, 0);
+        context.lineTo(x, 20);
+        context.stroke();
+      }
+      for (let y = 0; y < 20; y++) {
+        context.beginPath();
+        context.moveTo(0, y);
+        context.lineTo(10, y);
+        context.stroke();
+      }
+
+      drawMatrix(arena, { x: 0, y: 0 });
+      drawMatrix(player.matrix, player.pos);
+
+      if (gameOver) {
+        context.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        context.fillRect(0, 0, 10, 20);
+        context.fillStyle = '#fff';
+        context.font = '1px "Press Start 2P"';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText('GAME OVER', 5, 9);
+        context.font = '0.6px "Press Start 2P"';
+        context.fillText('Press R to restart', 5, 11);
+      }
+    }
+
+    function collide(arena, player) {
+      const [m, o] = [player.matrix, player.pos];
+      for (let y = 0; y < m.length; y++) {
+        for (let x = 0; x < m[y].length; x++) {
+          if (m[y][x] !== 0 &&
+            (arena[y + o.y] && arena[y + o.y][x + o.x]) !== 0) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    function merge(arena, player) {
+      player.matrix.forEach((row, y) => {
+        row.forEach((value, x) => {
+          if (value !== 0) {
+            arena[y + player.pos.y][x + player.pos.x] = value;
+          }
+        });
+      });
+    }
+
+    function arenaSweep() {
+      outer: for (let y = arena.length - 1; y >= 0; y--) {
+        if (arena[y].every(value => value !== 0)) {
+          const row = arena.splice(y, 1)[0].fill(0);
+          arena.unshift(row);
+          lines++;
+          score += 10 * level;
+          if (lines % 10 === 0) {
+            level++;
+            dropInterval *= 0.9;
+          }
+          updateScore();
+          y++;
+        }
+      }
+    }
+
+    function updateScore() {
+      scoreEl.innerText = score;
+      levelEl.innerText = level;
+    }
+
+    function playerDrop() {
+      player.pos.y++;
+      if (collide(arena, player)) {
+        player.pos.y--;
+        merge(arena, player);
+        playerReset();
+        arenaSweep();
+      }
+      dropCounter = 0;
+    }
+
+    function playerMove(dir) {
+      player.pos.x += dir;
+      if (collide(arena, player)) {
+        player.pos.x -= dir;
+      }
+    }
+
+    function playerRotate(dir) {
+      const pos = player.pos.x;
+      let offset = 1;
+      rotate(player.matrix, dir);
+      while (collide(arena, player)) {
+        player.pos.x += offset;
+        offset = -(offset + (offset > 0 ? 1 : -1));
+        if (offset > player.matrix[0].length) {
+          rotate(player.matrix, -dir);
+          player.pos.x = pos;
+          return;
+        }
+      }
+    }
+
+    function rotate(matrix, dir) {
+      for (let y = 0; y < matrix.length; y++) {
+        for (let x = 0; x < y; x++) {
+          [matrix[x][y], matrix[y][x]] = [matrix[y][x], matrix[x][y]];
+        }
+      }
+      if (dir > 0) {
+        matrix.forEach(row => row.reverse());
+      } else {
+        matrix.reverse();
+      }
+    }
+
+    function playerReset() {
+      const pieces = 'ILJOTSZ';
+      player.matrix = createPiece(pieces[pieces.length * Math.random() | 0]);
+      player.pos.y = 0;
+      player.pos.x = (arena[0].length / 2 | 0) - (player.matrix[0].length / 2 | 0);
+      if (collide(arena, player)) {
+        gameOver = true;
+      }
+    }
+
+    function update(time = 0) {
+      if (!paused && !gameOver) {
+        const deltaTime = time - lastTime;
+        lastTime = time;
+        dropCounter += deltaTime;
+        if (dropCounter > dropInterval) {
+          playerDrop();
+        }
+        draw();
+      } else {
+        draw();
+      }
+      requestAnimationFrame(update);
+    }
+
+    document.addEventListener('keydown', event => {
+      if (event.keyCode === 37) playerMove(-1);
+      else if (event.keyCode === 39) playerMove(1);
+      else if (event.keyCode === 40) playerDrop();
+      else if (event.keyCode === 81) playerRotate(-1);
+      else if (event.keyCode === 87 || event.keyCode === 38) playerRotate(1);
+      else if (event.keyCode === 80) togglePause();
+      else if (event.keyCode === 82 && gameOver) restart();
+    });
+
+    function togglePause() {
+      if (gameOver) return;
+      paused = !paused;
+    }
+
+    function restart() {
+      gameOver = false;
+      arena.forEach(row => row.fill(0));
+      score = 0;
+      level = 1;
+      lines = 0;
+      dropInterval = 1000;
+      playerReset();
+      updateScore();
+    }
+
+    const arena = createMatrix(10, 20);
+    const player = {
+      pos: { x: 0, y: 0 },
+      matrix: null,
+    };
+
+    playerReset();
+    update();
+  </script>
+</body>
+</html>
